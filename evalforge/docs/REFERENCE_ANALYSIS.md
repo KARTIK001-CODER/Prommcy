@@ -2,10 +2,11 @@
 
 | Metadata | Value |
 |---|---|
-| **Document Version** | 1.0.0 |
+| **Document Version** | 1.1.0 (Direct Source Code Inspection Verified) |
 | **Status** | Approved for Architecture (Phase 0) |
 | **Reference Subject** | Promptfoo (`promptfoo/promptfoo`, MIT License) |
-| **Scope** | Architectural Analysis, Design Patterns, Strengths, Limitations, and EvalForge Evolution |
+| **Verified Local Path** | `D:\Downloads\promptfoo-main\promptfoo-main` |
+| **Scope** | Architectural Analysis, Direct Codebase Inspection, Design Patterns, Strengths, Bottlenecks, and EvalForge Evolution |
 
 ---
 
@@ -61,6 +62,34 @@ Promptfoo is architected primarily as a **Node.js/TypeScript command-line tool**
 │   └─────────────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## 2.1. Direct Source Code Inspection Findings (`promptfoo-main`)
+
+Direct analysis of the reference codebase located at `D:\Downloads\promptfoo-main\promptfoo-main` revealed key internal implementation details that directly inform EvalForge's design:
+
+### 1. Database & Persistence Layer (`src/database/tables.ts`)
+- **Technology**: Promptfoo uses **Drizzle ORM over SQLite** (`drizzle-orm/sqlite-core`).
+- **Data Model**: Core tables (`prompts`, `tags`, `evals`, `eval_results`, `datasets`, `configs`, `blob_assets`, `traces`, `spans`, `model_audits`) store configurations, test cases, and model responses as stringified JSON blobs (`text('...', { mode: 'json' })`).
+- **Indexing on JSON**: To query into these JSON blobs, Promptfoo creates SQLite indexes on raw JSON paths (e.g. `index('eval_result_grading_result_reason_idx').on(sql'json_extract(${table.gradingResult}, "$.reason")')`).
+- **EvalForge Evolution**: EvalForge replaces this with **PostgreSQL 16 native JSONB** with GIN indexing and normalized relational columns. This prevents JSON schema parsing overhead and gives first-class relational integrity.
+
+### 2. Evaluator Engine Complexity (`src/evaluator/engine.ts`)
+- **Monolithic Engine**: `engine.ts` spans **4,359 lines of code** in a single file, intertwining Cartesian product generation, rate-limit queues (`ProviderGroupedCallQueue`), OpenTelemetry spans (`otelSdk`), CLI progress reporters (`CIProgressReporter`, `ProgressBarManager`), and score calculations.
+- **EvalForge Evolution**: EvalForge strictly decouples these responsibilities into distinct modules: `evalforge.modules.evaluations.matrix`, `evalforge.modules.jobs.worker`, `evalforge.modules.assertions.pipeline`, and `evalforge.modules.evaluations.telemetry`.
+
+### 3. Circular References and Serialization Hazards (`src/evaluate.ts`)
+- **Inspection Insight**: Comments in `src/evaluate.ts` (lines 40–52) highlight a known failure mode: live SDK instances (e.g., Bedrock's `BedrockRuntime`, Anthropic clients) held circular references that broke Drizzle's JSON serialization (`evalRecord.save()`), requiring custom shallow cloning (`cloneTestForResolve`). Furthermore, inline JavaScript transforms were silently dropped by `JSON.stringify`.
+- **EvalForge Evolution**: EvalForge avoids this completely by enforcing strict **Pydantic v2 Data Transfer Objects (DTOs)**. Decoupled provider classes return pure, immutable DTOs (`ProviderResponseDTO`), ensuring that live network sockets or client sessions can never touch the database persistence pipeline.
+
+### 4. Layering Rules (`architecture/layers.json`)
+- Promptfoo defines a 12-tier architecture enforcement rule: `contracts` $\to$ `validation` $\to$ `legacy-contracts` $\to$ `legacy-runtime` $\to$ `node` $\to$ `providers` $\to$ `redteam` $\to$ `core` $\to$ `view-server` $\to$ `cli` $\to$ `app` $\to$ `facade`.
+- **EvalForge Evolution**: EvalForge adopts a clean 4-layer Python architecture (Presentation $\to$ Domain $\to$ Infrastructure $\to$ Persistence) enforced by MyPy and Ruff.
+
+### 5. Extensive Assertion & Red Team Catalog
+- Promptfoo contains **60+ assertion modules** in `src/assertions/` and **65+ red team plugins/strategies** in `src/redteam/`, including advanced attacks like Crescendo (multi-turn escalation), GCG (adversarial suffixes), homoglyphs, and BOLA/BFLA probes.
+- **EvalForge Evolution**: EvalForge maps these attack patterns to our **OWASP Top 10 for LLMs** and **MITRE ATLAS** engine in Phase 6.
 
 ---
 
